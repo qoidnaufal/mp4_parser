@@ -1,5 +1,6 @@
 mod av01;
 mod avc1;
+mod ctts;
 mod data;
 mod dinf;
 mod edts;
@@ -20,6 +21,8 @@ mod mvhd;
 mod smhd;
 mod stbl;
 mod stsd;
+mod stss;
+mod stts;
 mod tkhd;
 mod trak;
 mod trex;
