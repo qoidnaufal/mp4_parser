@@ -6,21 +6,15 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct SttsBox {
+pub struct Co64Box {
     pub version: u8,
     pub flags: u32,
-    pub entries: Vec<SttsEntry>,
+    pub entries: Vec<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct SttsEntry {
-    pub sample_count: u32,
-    pub sample_delta: u32,
-}
-
-impl SttsBox {
+impl Co64Box {
     fn get_type(&self) -> BoxType {
-        BoxType::SttsBox
+        BoxType::Co64Box
     }
 
     fn get_size(&self) -> u64 {
@@ -28,7 +22,7 @@ impl SttsBox {
     }
 }
 
-impl Mp4Box for SttsBox {
+impl Mp4Box for Co64Box {
     fn box_type(&self) -> BoxType {
         self.get_type()
     }
@@ -38,14 +32,14 @@ impl Mp4Box for SttsBox {
     }
 }
 
-impl<R: Read + Seek> ReadBox<&mut R> for SttsBox {
+impl<R: Read + Seek> ReadBox<&mut R> for Co64Box {
     fn read_box(reader: &mut R, size: u64) -> io::Result<Self> {
         let start = box_start(reader)?;
         let (version, flags) = read_box_header_ext(reader)?;
 
         let header_size = HEADER_SIZE + HEADER_EXT_SIZE;
         let other_size = size_of::<u32>(); // entry_count
-        let entry_size = size_of::<u32>() + size_of::<u32>(); // sample_count + sample_delta
+        let entry_size = size_of::<u64>(); // chunk_offset
         let entry_count = BigEndian::read_u32(reader)?;
 
         if u64::from(entry_count)
@@ -56,18 +50,15 @@ impl<R: Read + Seek> ReadBox<&mut R> for SttsBox {
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "stts entry_count indicates more entries than coul fit in the box",
+                "co64 entry_count indicates more entries than could fit in the box",
             ));
         }
 
-        let mut entries: Vec<SttsEntry> = Vec::with_capacity(entry_count as _);
+        let mut entries = Vec::with_capacity(entry_count as _);
 
         for _ in 0..entry_count {
-            let entry = SttsEntry {
-                sample_count: BigEndian::read_u32(reader)?,
-                sample_delta: BigEndian::read_u32(reader)?,
-            };
-            entries.push(entry);
+            let chunk_offset = BigEndian::read_u64(reader)?;
+            entries.push(chunk_offset)
         }
 
         skip_bytes_to(reader, start + size)?;

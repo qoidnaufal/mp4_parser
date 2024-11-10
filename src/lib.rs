@@ -1,5 +1,6 @@
 mod av01;
 mod avc1;
+mod co64;
 mod ctts;
 mod data;
 mod dinf;
@@ -20,8 +21,11 @@ mod mvex;
 mod mvhd;
 mod smhd;
 mod stbl;
+mod stco;
+mod stsc;
 mod stsd;
 mod stss;
+mod stsz;
 mod stts;
 mod tkhd;
 mod trak;
@@ -150,6 +154,20 @@ boxtype! {
     WaveBox => 0x77617665
 }
 
+impl std::fmt::Debug for BoxType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fourcc = FourCC::from(*self);
+        write!(f, "{fourcc}")
+    }
+}
+
+impl std::fmt::Display for BoxType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fourcc = FourCC::from(*self);
+        write!(f, "{fourcc}")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioObjectType {
     AacMain = 1,                                       // AAC Main Profile
@@ -194,219 +212,6 @@ pub enum AudioObjectType {
     LowDelayMpegSurround = 44,                         // LD MPEG Surround
     SpatialAudioObjectCodingDialogueEnhancement = 45,  // SAOC-DE
     AudioSync = 46,                                    // Audio Sync
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum SampleFreqIndex {
-    Freq96000 = 0x0,
-    Freq88200 = 0x1,
-    Freq64000 = 0x2,
-    Freq48000 = 0x3,
-    Freq44100 = 0x4,
-    Freq32000 = 0x5,
-    Freq24000 = 0x6,
-    Freq22050 = 0x7,
-    Freq16000 = 0x8,
-    Freq12000 = 0x9,
-    Freq11025 = 0xa,
-    Freq8000 = 0xb,
-    Freq7350 = 0xc,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum ChannelConfig {
-    Mono = 0x1,
-    Stereo = 0x2,
-    Three = 0x3,
-    Four = 0x4,
-    Five = 0x5,
-    FiveOne = 0x6,
-    SevenOne = 0x7,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DataType {
-    Binary = 0x000000,
-    Text = 0x000001,
-    Image = 0x00000D,
-    TempoCpil = 0x000015,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum MetadataKey {
-    Title,
-    Year,
-    Poster,
-    Summary,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrackKind {
-    Video,
-    Audio,
-    Subtitle,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct RgbColor {
-    pub red: u16,
-    pub green: u16,
-    pub blue: u16,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct RgbaColor {
-    pub red: u8,
-    pub green: u8,
-    pub blue: u8,
-    pub alpha: u8,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AacConfig {
-    pub bitrate: u32,
-    pub profile: AudioObjectType,
-    pub freq_index: SampleFreqIndex,
-    pub chan_conf: ChannelConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Matrix {
-    pub a: i32,
-    pub b: i32,
-    pub u: i32,
-    pub c: i32,
-    pub d: i32,
-    pub v: i32,
-    pub x: i32,
-    pub y: i32,
-    pub w: i32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Ratio<T> {
-    numer: T,
-    denom: T,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct BoxHeader {
-    name: BoxType,
-    size: u64,
-}
-
-#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
-struct FourCC {
-    value: [u8; 4],
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct RawBox<T> {
-    pub contents: T,
-    pub raw: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FixedPointU8(Ratio<u16>);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FixedPointI8(Ratio<i16>);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FixedPointU16(Ratio<u32>);
-
-pub struct BigEndian;
-
-pub trait Metadata<'a> {
-    fn title(&self) -> Option<Cow<'_, str>>;
-    fn year(&self) -> Option<u32>;
-    fn poster(&self) -> Option<&[u8]>;
-    fn summary(&self) -> Option<Cow<'_, str>>;
-}
-
-pub trait Mp4Box: Sized {
-    fn box_type(&self) -> BoxType;
-    fn box_size(&self) -> u64;
-}
-
-pub trait ReadBox<T>: Sized {
-    fn read_box(_: T, size: u64) -> io::Result<Self>;
-}
-
-impl std::fmt::Display for TrackKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Video => DISPLAY_TYPE_VIDEO,
-            Self::Audio => DISPLAY_TYPE_AUDIO,
-            Self::Subtitle => DISPLAY_TYPE_SUBTITLE,
-        };
-        write!(f, "{s}")
-    }
-}
-
-impl TryFrom<&str> for TrackKind {
-    type Error = io::Error;
-    fn try_from(handler: &str) -> Result<Self, Self::Error> {
-        match handler {
-            HANDLER_TYPE_VIDEO => Ok(Self::Video),
-            HANDLER_TYPE_AUDIO => Ok(Self::Audio),
-            HANDLER_TYPE_SUBTITLE => Ok(Self::Subtitle),
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "unsupported handler type",
-            )),
-        }
-    }
-}
-
-impl TryFrom<&FourCC> for TrackKind {
-    type Error = io::Error;
-    fn try_from(fourcc: &FourCC) -> Result<Self, Self::Error> {
-        match fourcc.value {
-            HANDLER_TYPE_VIDEO_FOURCC => Ok(Self::Video),
-            HANDLER_TYPE_AUDIO_FOURCC => Ok(Self::Audio),
-            HANDLER_TYPE_SUBTITLE_FOURCC => Ok(Self::Subtitle),
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "unsupported handler type",
-            )),
-        }
-    }
-}
-
-impl From<TrackKind> for FourCC {
-    fn from(track_kind: TrackKind) -> Self {
-        match track_kind {
-            TrackKind::Video => HANDLER_TYPE_VIDEO_FOURCC.into(),
-            TrackKind::Audio => HANDLER_TYPE_AUDIO_FOURCC.into(),
-            TrackKind::Subtitle => HANDLER_TYPE_SUBTITLE_FOURCC.into(),
-        }
-    }
-}
-
-impl Default for AacConfig {
-    fn default() -> Self {
-        Self {
-            bitrate: 0,
-            profile: AudioObjectType::AacLowComplexity,
-            freq_index: SampleFreqIndex::Freq48000,
-            chan_conf: ChannelConfig::Stereo,
-        }
-    }
-}
-
-impl std::fmt::Debug for BoxType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let fourcc = FourCC::from(*self);
-        write!(f, "{fourcc}")
-    }
-}
-
-impl std::fmt::Display for BoxType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let fourcc = FourCC::from(*self);
-        write!(f, "{fourcc}")
-    }
 }
 
 impl TryFrom<u8> for AudioObjectType {
@@ -515,6 +320,23 @@ impl std::fmt::Display for AudioObjectType {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum SampleFreqIndex {
+    Freq96000 = 0x0,
+    Freq88200 = 0x1,
+    Freq64000 = 0x2,
+    Freq48000 = 0x3,
+    Freq44100 = 0x4,
+    Freq32000 = 0x5,
+    Freq24000 = 0x6,
+    Freq22050 = 0x7,
+    Freq16000 = 0x8,
+    Freq12000 = 0x9,
+    Freq11025 = 0xa,
+    Freq8000 = 0xb,
+    Freq7350 = 0xc,
+}
+
 impl TryFrom<u8> for SampleFreqIndex {
     type Error = io::Error;
     fn try_from(value: u8) -> Result<Self, Self::Error> {
@@ -560,6 +382,17 @@ impl SampleFreqIndex {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ChannelConfig {
+    Mono = 0x1,
+    Stereo = 0x2,
+    Three = 0x3,
+    Four = 0x4,
+    Five = 0x5,
+    FiveOne = 0x6,
+    SevenOne = 0x7,
+}
+
 impl TryFrom<u8> for ChannelConfig {
     type Error = io::Error;
     fn try_from(value: u8) -> Result<Self, Self::Error> {
@@ -594,6 +427,14 @@ impl std::fmt::Display for ChannelConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DataType {
+    Binary = 0x000000,
+    Text = 0x000001,
+    Image = 0x00000D,
+    TempoCpil = 0x000015,
+}
+
 impl Default for DataType {
     fn default() -> Self {
         Self::Binary
@@ -614,6 +455,119 @@ impl TryFrom<u32> for DataType {
             )),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MetadataKey {
+    Title,
+    Year,
+    Poster,
+    Summary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackKind {
+    Video,
+    Audio,
+    Subtitle,
+}
+
+impl std::fmt::Display for TrackKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Video => DISPLAY_TYPE_VIDEO,
+            Self::Audio => DISPLAY_TYPE_AUDIO,
+            Self::Subtitle => DISPLAY_TYPE_SUBTITLE,
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl TryFrom<&str> for TrackKind {
+    type Error = io::Error;
+    fn try_from(handler: &str) -> Result<Self, Self::Error> {
+        match handler {
+            HANDLER_TYPE_VIDEO => Ok(Self::Video),
+            HANDLER_TYPE_AUDIO => Ok(Self::Audio),
+            HANDLER_TYPE_SUBTITLE => Ok(Self::Subtitle),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unsupported handler type",
+            )),
+        }
+    }
+}
+
+impl TryFrom<&FourCC> for TrackKind {
+    type Error = io::Error;
+    fn try_from(fourcc: &FourCC) -> Result<Self, Self::Error> {
+        match fourcc.value {
+            HANDLER_TYPE_VIDEO_FOURCC => Ok(Self::Video),
+            HANDLER_TYPE_AUDIO_FOURCC => Ok(Self::Audio),
+            HANDLER_TYPE_SUBTITLE_FOURCC => Ok(Self::Subtitle),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unsupported handler type",
+            )),
+        }
+    }
+}
+
+impl From<TrackKind> for FourCC {
+    fn from(track_kind: TrackKind) -> Self {
+        match track_kind {
+            TrackKind::Video => HANDLER_TYPE_VIDEO_FOURCC.into(),
+            TrackKind::Audio => HANDLER_TYPE_AUDIO_FOURCC.into(),
+            TrackKind::Subtitle => HANDLER_TYPE_SUBTITLE_FOURCC.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RgbColor {
+    pub red: u16,
+    pub green: u16,
+    pub blue: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RgbaColor {
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+    pub alpha: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AacConfig {
+    pub bitrate: u32,
+    pub profile: AudioObjectType,
+    pub freq_index: SampleFreqIndex,
+    pub chan_conf: ChannelConfig,
+}
+
+impl Default for AacConfig {
+    fn default() -> Self {
+        Self {
+            bitrate: 0,
+            profile: AudioObjectType::AacLowComplexity,
+            freq_index: SampleFreqIndex::Freq48000,
+            chan_conf: ChannelConfig::Stereo,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Matrix {
+    pub a: i32,
+    pub b: i32,
+    pub u: i32,
+    pub c: i32,
+    pub d: i32,
+    pub v: i32,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
 }
 
 impl std::fmt::Display for Matrix {
@@ -665,6 +619,12 @@ impl Matrix {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ratio<T> {
+    numer: T,
+    denom: T,
+}
+
 use std::ops::{Add, Div, Mul, Rem, Sub};
 
 impl<T> Ratio<T>
@@ -700,6 +660,15 @@ where
         &self.denom
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedPointU8(Ratio<u16>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedPointI8(Ratio<i16>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedPointU16(Ratio<u32>);
 
 impl FixedPointU8 {
     pub fn new(val: u8) -> Self {
@@ -755,40 +724,10 @@ impl FixedPointU16 {
     }
 }
 
-impl<'a, T: Metadata<'a>> Metadata<'a> for &'a T {
-    fn title(&self) -> Option<Cow<'_, str>> {
-        (**self).title()
-    }
-
-    fn year(&self) -> Option<u32> {
-        (**self).year()
-    }
-
-    fn poster(&self) -> Option<&[u8]> {
-        (**self).poster()
-    }
-
-    fn summary(&self) -> Option<Cow<'_, str>> {
-        (**self).summary()
-    }
-}
-
-impl<'a, T: Metadata<'a>> Metadata<'a> for Option<T> {
-    fn title(&self) -> Option<Cow<'_, str>> {
-        self.as_ref().and_then(|t| t.title())
-    }
-
-    fn year(&self) -> Option<u32> {
-        self.as_ref().and_then(|t| t.year())
-    }
-
-    fn poster(&self) -> Option<&[u8]> {
-        self.as_ref().and_then(|t| t.poster())
-    }
-
-    fn summary(&self) -> Option<Cow<'_, str>> {
-        self.as_ref().and_then(|t| t.summary())
-    }
+#[derive(Debug, Clone, Copy)]
+struct BoxHeader {
+    name: BoxType,
+    size: u64,
 }
 
 impl BoxHeader {
@@ -826,6 +765,11 @@ impl BoxHeader {
             })
         }
     }
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+struct FourCC {
+    value: [u8; 4],
 }
 
 impl FromStr for FourCC {
@@ -886,6 +830,12 @@ impl std::fmt::Display for FourCC {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RawBox<T> {
+    pub contents: T,
+    pub raw: Vec<u8>,
+}
+
 impl<T> std::ops::Deref for RawBox<T> {
     type Target = T;
 
@@ -916,6 +866,8 @@ where
         Ok(Self { contents, raw })
     }
 }
+
+pub struct BigEndian;
 
 impl BigEndian {
     pub fn read_i8<R: Read + Seek>(reader: &mut R) -> io::Result<i8> {
@@ -987,6 +939,58 @@ impl BigEndian {
         reader.read_exact(&mut buf)?;
         Ok(u64::from_be_bytes(buf))
     }
+}
+
+pub trait Metadata<'a> {
+    fn title(&self) -> Option<Cow<'_, str>>;
+    fn year(&self) -> Option<u32>;
+    fn poster(&self) -> Option<&[u8]>;
+    fn summary(&self) -> Option<Cow<'_, str>>;
+}
+
+impl<'a, T: Metadata<'a>> Metadata<'a> for &'a T {
+    fn title(&self) -> Option<Cow<'_, str>> {
+        (**self).title()
+    }
+
+    fn year(&self) -> Option<u32> {
+        (**self).year()
+    }
+
+    fn poster(&self) -> Option<&[u8]> {
+        (**self).poster()
+    }
+
+    fn summary(&self) -> Option<Cow<'_, str>> {
+        (**self).summary()
+    }
+}
+
+impl<'a, T: Metadata<'a>> Metadata<'a> for Option<T> {
+    fn title(&self) -> Option<Cow<'_, str>> {
+        self.as_ref().and_then(|t| t.title())
+    }
+
+    fn year(&self) -> Option<u32> {
+        self.as_ref().and_then(|t| t.year())
+    }
+
+    fn poster(&self) -> Option<&[u8]> {
+        self.as_ref().and_then(|t| t.poster())
+    }
+
+    fn summary(&self) -> Option<Cow<'_, str>> {
+        self.as_ref().and_then(|t| t.summary())
+    }
+}
+
+pub trait Mp4Box: Sized {
+    fn box_type(&self) -> BoxType;
+    fn box_size(&self) -> u64;
+}
+
+pub trait ReadBox<T>: Sized {
+    fn read_box(_: T, size: u64) -> io::Result<Self>;
 }
 
 fn read_box_header_ext<R: Read>(reader: &mut R) -> io::Result<(u8, u32)> {

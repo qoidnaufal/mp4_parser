@@ -87,54 +87,6 @@ impl StsdBoxContent {
     }
 }
 
-fn hevc_codec_details(hvcc: &HevcDecoderConfigurationRecord) -> String {
-    let mut codec = String::new();
-    match hvcc.general_profile_space {
-        1 => codec.push_str(".A"),
-        2 => codec.push_str(".B"),
-        3 => codec.push_str(".C"),
-        _ => {}
-    }
-    write!(&mut codec, ".{}", hvcc.general_profile_idc).ok();
-
-    let mut val = hvcc.general_profile_compatibility_flags;
-    let mut reversed = 0;
-
-    for i in 0..32 {
-        reversed |= val & 1;
-        if i == 31 {
-            break;
-        }
-        reversed <<= 1;
-        val >>= 1;
-    }
-    write!(&mut codec, ".{reversed:X}").ok();
-
-    if hvcc.general_tier_flag {
-        codec.push_str(".H")
-    } else {
-        codec.push_str(".L")
-    }
-    write!(&mut codec, "{}", hvcc.general_level_idc).ok();
-
-    let mut constraint = [0u8; 6];
-    constraint.copy_from_slice(&hvcc.general_constraint_indicator_flag.to_be_bytes()[2..]);
-
-    let mut has_byte = false;
-    let mut i: isize = 5;
-
-    while i >= 0 {
-        let v = constraint[i as usize];
-        if v > 0 || has_byte {
-            write!(&mut codec, ".{v:00X}").ok();
-            has_byte = true;
-        }
-        i -= 1;
-    }
-
-    codec
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct StsdBox {
     pub version: u8,
@@ -210,7 +162,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for StsdBox {
             BoxType::Av01Box => StsdBoxContent::Av01(Av01Box::read_box(reader, header.size)?),
             //
             // According to MPEG-4 part 15, sections 5.4.2.1.2 and 5.4.4
-            // or the whole 5.4 section in general
+            // -- or the whole 5.4 section in general --
             // the Avc1Box and Avc3Box are identical,
             // but the Avc3Box is used in some cases
             //
@@ -232,4 +184,52 @@ impl<R: Read + Seek> ReadBox<&mut R> for StsdBox {
             contents,
         })
     }
+}
+
+fn hevc_codec_details(hvcc: &HevcDecoderConfigurationRecord) -> String {
+    let mut codec = String::new();
+    match hvcc.general_profile_space {
+        1 => codec.push_str(".A"),
+        2 => codec.push_str(".B"),
+        3 => codec.push_str(".C"),
+        _ => {}
+    }
+    write!(&mut codec, ".{}", hvcc.general_profile_idc).ok();
+
+    let mut val = hvcc.general_profile_compatibility_flags;
+    let mut reversed = 0;
+
+    for i in 0..32 {
+        reversed |= val & 1;
+        if i == 31 {
+            break;
+        }
+        reversed <<= 1;
+        val >>= 1;
+    }
+    write!(&mut codec, ".{reversed:X}").ok();
+
+    if hvcc.general_tier_flag {
+        codec.push_str(".H")
+    } else {
+        codec.push_str(".L")
+    }
+    write!(&mut codec, "{}", hvcc.general_level_idc).ok();
+
+    let mut constraint = [0u8; 6];
+    constraint.copy_from_slice(&hvcc.general_constraint_indicator_flag.to_be_bytes()[2..]);
+
+    let mut has_byte = false;
+    let mut i: isize = 5;
+
+    while i >= 0 {
+        let v = constraint[i as usize];
+        if v > 0 || has_byte {
+            write!(&mut codec, ".{v:00X}").ok();
+            has_byte = true;
+        }
+        i -= 1;
+    }
+
+    codec
 }
