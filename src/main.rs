@@ -1,3 +1,4 @@
+use parse_mp4::read;
 use std::io;
 
 fn main() -> io::Result<()> {

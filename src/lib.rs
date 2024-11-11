@@ -31,6 +31,7 @@ mod tkhd;
 mod trak;
 mod trex;
 mod tx3g;
+mod udta;
 mod vmhd;
 mod vp08;
 mod vp09;
@@ -43,6 +44,7 @@ use std::{
 };
 
 use ftyp::FtypBox;
+use moov::MoovBox;
 
 const HEADER_SIZE: u64 = 0b1000;
 const HEADER_EXT_SIZE: u64 = 0b1000;
@@ -65,7 +67,7 @@ pub type TrackId = u32;
 macro_rules! boxtype {
     ($( $name:ident => $value:expr ),*) => {
         #[derive(Clone, Copy, PartialEq, Eq)]
-        enum BoxType {
+        pub enum BoxType {
             $( $name, )*
             UnknownBox(u32),
         }
@@ -1025,10 +1027,11 @@ fn skip_box<S: Seek>(seeker: &mut S, size: u64) -> io::Result<()> {
     Ok(())
 }
 
-fn read<R: Read + Seek>(mut reader: R, size: u64) -> io::Result<()> {
+pub fn read<R: Read + Seek>(mut reader: R, size: u64) -> io::Result<()> {
     let start = reader.stream_position()?;
 
     let mut ftyp = None;
+    let mut moov = None;
 
     let mut current = start;
 
@@ -1057,6 +1060,10 @@ fn read<R: Read + Seek>(mut reader: R, size: u64) -> io::Result<()> {
             }
             BoxType::MdatBox => {
                 skip_box(&mut reader, header.size)?;
+            }
+            BoxType::MoovBox => {
+                moov.replace(MoovBox::read_box(&mut reader, header.size)?);
+                eprintln!("done reading moov box");
             }
             _ => {
                 skip_box(&mut reader, header.size)?;

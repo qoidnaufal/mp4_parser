@@ -5,6 +5,7 @@ use crate::{
     FixedPointU8, Matrix, Mp4Box, ReadBox, HEADER_EXT_SIZE, HEADER_SIZE,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MvhdBox {
     pub version: u8,
     pub flags: u32,
@@ -16,6 +17,23 @@ pub struct MvhdBox {
     pub volume: FixedPointU8,
     pub matrix: Matrix,
     pub next_track_id: u32,
+}
+
+impl Default for MvhdBox {
+    fn default() -> Self {
+        Self {
+            version: 0,
+            flags: 0,
+            creation_time: 0,
+            modification_time: 0,
+            timescale: 1000,
+            duration: 0,
+            rate: FixedPointU16::new(1),
+            volume: FixedPointU8::new(1),
+            matrix: Matrix::default(),
+            next_track_id: 1,
+        }
+    }
 }
 
 impl MvhdBox {
@@ -34,23 +52,6 @@ impl MvhdBox {
 
         size += 80;
         size
-    }
-}
-
-impl Default for MvhdBox {
-    fn default() -> Self {
-        Self {
-            version: 0,
-            flags: 0,
-            creation_time: 0,
-            modification_time: 0,
-            timescale: 1000,
-            duration: 0,
-            rate: FixedPointU16::new(1),
-            volume: FixedPointU8::new(1),
-            matrix: Matrix::default(),
-            next_track_id: 1,
-        }
     }
 }
 
