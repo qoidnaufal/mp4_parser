@@ -739,14 +739,19 @@ impl BoxHeader {
         let mut buf = [0u8; 8];
         reader.read_exact(&mut buf)?;
 
-        let size = u32::from_be_bytes(buf[..4].try_into().unwrap());
-        let typ = u32::from_be_bytes(buf[4..].try_into().unwrap());
+        let mut s = [0u8; 4];
+        let mut t = [0u8; 4];
+        s.copy_from_slice(&buf[..4]);
+        t.copy_from_slice(&buf[4..]);
+
+        let size = u32::from_be_bytes(s);
+        let type_ = u32::from_be_bytes(t);
 
         if size == 1 {
             let largesize = BigEndian::read_u64(reader)?;
 
             Ok(Self {
-                name: BoxType::from(typ),
+                name: BoxType::from(type_),
                 size: match largesize {
                     0 => 0,
                     1..=15 => {
@@ -760,7 +765,7 @@ impl BoxHeader {
             })
         } else {
             Ok(Self {
-                name: BoxType::from(typ),
+                name: BoxType::from(type_),
                 size: size as u64,
             })
         }
