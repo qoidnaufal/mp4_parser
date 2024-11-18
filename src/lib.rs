@@ -29,6 +29,7 @@ mod stsd;
 mod stss;
 mod stsz;
 mod stts;
+mod tfhd;
 mod tkhd;
 mod traf;
 mod trak;
