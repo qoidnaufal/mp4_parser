@@ -14,7 +14,9 @@ mod mdhd;
 mod mdia;
 mod mehd;
 mod meta;
+mod mfhd;
 mod minf;
+mod moof;
 mod moov;
 mod mp4a;
 mod mvex;
@@ -28,6 +30,7 @@ mod stss;
 mod stsz;
 mod stts;
 mod tkhd;
+mod traf;
 mod trak;
 mod trex;
 mod tx3g;
@@ -47,7 +50,7 @@ use ftyp::FtypBox;
 use moov::MoovBox;
 
 const HEADER_SIZE: u64 = 0b1000;
-const HEADER_EXT_SIZE: u64 = 0b1000;
+const HEADER_EXT_SIZE: u64 = 0b0100;
 
 const DISPLAY_TYPE_VIDEO: &str = "Video";
 const DISPLAY_TYPE_AUDIO: &str = "Audio";
@@ -1027,51 +1030,52 @@ fn skip_box<S: Seek>(seeker: &mut S, size: u64) -> io::Result<()> {
     Ok(())
 }
 
-pub fn read<R: Read + Seek>(mut reader: R, size: u64) -> io::Result<()> {
-    let start = reader.stream_position()?;
+pub struct Mp4;
 
-    let mut ftyp = None;
-    let mut moov = None;
+impl Mp4 {
+    pub fn read<R: Read + Seek>(mut reader: R, size: u64) -> io::Result<()> {
+        let start = reader.stream_position()?;
 
-    let mut current = start;
+        let mut ftyp = None;
+        let mut moov = None;
 
-    while current < size {
-        let header = BoxHeader::read(&mut reader)?;
+        let mut current = start;
+        while current < size {
+            let header = BoxHeader::read(&mut reader)?;
 
-        dbg!(header);
+            if header.size > size {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "file contains a box with a larger scale than it",
+                ));
+            }
 
-        if header.size > size {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "file contains a box with a larger scale than it",
-            ));
+            if header.size == 0 {
+                break;
+            }
+
+            match header.name {
+                BoxType::FtypBox => {
+                    ftyp.replace(FtypBox::read_box(&mut reader, header.size)?);
+                }
+                BoxType::FreeBox => {
+                    skip_box(&mut reader, header.size)?;
+                }
+                BoxType::MdatBox => {
+                    skip_box(&mut reader, header.size)?;
+                }
+                BoxType::MoovBox => {
+                    moov.replace(MoovBox::read_box(&mut reader, header.size)?);
+                }
+                BoxType::MoofBox => {}
+                _ => {
+                    skip_box(&mut reader, header.size)?;
+                }
+            }
+
+            current = reader.stream_position()?;
         }
 
-        if header.size == 0 {
-            break;
-        }
-
-        match header.name {
-            BoxType::FtypBox => {
-                ftyp.replace(FtypBox::read_box(&mut reader, header.size)?);
-            }
-            BoxType::FreeBox => {
-                skip_box(&mut reader, header.size)?;
-            }
-            BoxType::MdatBox => {
-                skip_box(&mut reader, header.size)?;
-            }
-            BoxType::MoovBox => {
-                moov.replace(MoovBox::read_box(&mut reader, header.size)?);
-                eprintln!("done reading moov box");
-            }
-            _ => {
-                skip_box(&mut reader, header.size)?;
-            }
-        }
-
-        current = reader.stream_position()?;
+        Ok(())
     }
-
-    Ok(())
 }

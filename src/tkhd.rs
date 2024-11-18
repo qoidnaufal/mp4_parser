@@ -84,33 +84,20 @@ impl<R: Read + Seek> ReadBox<&mut R> for TkhdBox {
         let start = box_start(reader)?;
         let (version, flags) = read_box_header_ext(reader)?;
         let (creation_time, modification_time, track_id, _, duration) = if version == 1 {
-            let mut num64 = [0u64; 2];
-            let mut num32 = [0u32; 2];
-
-            for i in 0..2 {
-                num64[i] = BigEndian::read_u64(reader)?;
-            }
-
-            for i in 0..2 {
-                num32[i] = BigEndian::read_u32(reader)?;
-            }
-
-            let num = BigEndian::read_u64(reader)?;
-
-            (num64[0], num64[1], num32[0], num32[1], num)
-        } else if version == 0 {
-            let mut nums = [0u32; 5];
-
-            for i in 0..5 {
-                nums[i] = BigEndian::read_u32(reader)?;
-            }
-
             (
-                nums[0] as u64,
-                nums[1] as u64,
-                nums[2],
-                nums[3],
-                nums[4] as u64,
+                BigEndian::read_u64(reader)?,
+                BigEndian::read_u64(reader)?,
+                BigEndian::read_u32(reader)?,
+                BigEndian::read_u32(reader)?,
+                BigEndian::read_u64(reader)?,
+            )
+        } else if version == 0 {
+            (
+                BigEndian::read_u32(reader)? as u64,
+                BigEndian::read_u32(reader)? as u64,
+                BigEndian::read_u32(reader)?,
+                BigEndian::read_u32(reader)?,
+                BigEndian::read_u32(reader)? as u64,
             )
         } else {
             return Err(io::Error::new(
@@ -121,14 +108,9 @@ impl<R: Read + Seek> ReadBox<&mut R> for TkhdBox {
 
         let _ = BigEndian::read_u64(reader)?; // reserved
 
-        let mut array_u16 = [0u16; 3];
-        for i in 0..array_u16.len() {
-            array_u16[i] = BigEndian::read_u16(reader)?;
-        }
-
-        let layer = array_u16[0];
-        let alternate_group = array_u16[1];
-        let volume = FixedPointU8::new_raw(array_u16[2]);
+        let layer = BigEndian::read_u16(reader)?;
+        let alternate_group = BigEndian::read_u16(reader)?;
+        let volume = FixedPointU8::new_raw(BigEndian::read_u16(reader)?);
 
         let _ = BigEndian::read_u16(reader)?; // reserved
 

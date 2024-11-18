@@ -6,6 +6,14 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ElstEntry {
+    pub segment_duration: u64,
+    pub media_time: u64,
+    pub media_rate: u16,
+    pub media_rate_fraction: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ElstBox {
     pub version: u8,
     pub flags: u32,
@@ -42,9 +50,9 @@ impl<R: Read + Seek> ReadBox<&mut R> for ElstBox {
     fn read_box(reader: &mut R, size: u64) -> io::Result<Self> {
         let start = box_start(reader)?;
         let (version, flags) = read_box_header_ext(reader)?;
+
         let header_size = HEADER_SIZE + HEADER_EXT_SIZE;
         let entry_count = BigEndian::read_u32(reader)?;
-
         let other_size = size_of::<i32>(); // entry_count
 
         let entry_size = {
@@ -57,6 +65,8 @@ impl<R: Read + Seek> ReadBox<&mut R> for ElstBox {
             entry_size += size_of::<i16>() + size_of::<i16>(); // media_rate_integer + media_rate_fraction
             entry_size
         };
+
+        dbg!(entry_count, entry_size, size, other_size);
 
         if u64::from(entry_count)
             > size
@@ -74,17 +84,12 @@ impl<R: Read + Seek> ReadBox<&mut R> for ElstBox {
 
         for _ in 0..entry_count {
             let (segment_duration, media_time) = if version == 1 {
-                let mut nums_arr = [0u64; 2];
-                for i in 0..nums_arr.len() {
-                    nums_arr[i] = BigEndian::read_u64(reader)?;
-                }
-                (nums_arr[0], nums_arr[1])
+                (BigEndian::read_u64(reader)?, BigEndian::read_u64(reader)?)
             } else {
-                let mut nums_arr = [0u32; 2];
-                for i in 0..nums_arr.len() {
-                    nums_arr[i] = BigEndian::read_u32(reader)?;
-                }
-                (nums_arr[0] as u64, nums_arr[1] as u64)
+                (
+                    BigEndian::read_u32(reader)? as u64,
+                    BigEndian::read_u32(reader)? as u64,
+                )
             };
 
             let entry = ElstEntry {
@@ -104,12 +109,4 @@ impl<R: Read + Seek> ReadBox<&mut R> for ElstBox {
             entries,
         })
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ElstEntry {
-    pub segment_duration: u64,
-    pub media_time: u64,
-    pub media_rate: u16,
-    pub media_rate_fraction: u16,
 }

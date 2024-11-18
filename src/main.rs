@@ -1,4 +1,4 @@
-use parse_mp4::read;
+use parse_mp4::Mp4;
 use std::io;
 
 fn main() -> io::Result<()> {
@@ -6,7 +6,7 @@ fn main() -> io::Result<()> {
     let len = bytes.len();
     let reader = io::Cursor::new(bytes);
 
-    read(reader, len as _)?;
+    Mp4::read(reader, len as _)?;
 
     Ok(())
 }
