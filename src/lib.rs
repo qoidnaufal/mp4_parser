@@ -35,6 +35,7 @@ mod tkhd;
 mod traf;
 mod trak;
 mod trex;
+mod trun;
 mod tx3g;
 mod udta;
 mod vmhd;

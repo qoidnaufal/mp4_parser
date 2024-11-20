@@ -1,4 +1,4 @@
-use crate::{tfdt::TfdtBox, tfhd::TfhdBox};
+use crate::{tfdt::TfdtBox, tfhd::TfhdBox, trun::TrunBox};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TrafBox {
