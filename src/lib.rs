@@ -6,6 +6,7 @@ mod data;
 mod dinf;
 mod edts;
 mod elst;
+mod emsg;
 mod ftyp;
 mod hdlr;
 mod hevc;
@@ -45,11 +46,14 @@ mod vpcc;
 
 use std::{
     borrow::Cow,
+    collections::BTreeMap,
     io::{self, Read, Seek},
     str::FromStr,
 };
 
+use emsg::EmsgBox;
 use ftyp::FtypBox;
+use moof::MoofBox;
 use moov::MoovBox;
 
 const HEADER_SIZE: u64 = 0b1000;
@@ -1033,18 +1037,30 @@ fn skip_box<S: Seek>(seeker: &mut S, size: u64) -> io::Result<()> {
     Ok(())
 }
 
-pub struct Mp4;
+pub struct Track {}
+
+pub struct Mp4 {
+    pub ftyp: FtypBox,
+    pub moov: MoovBox,
+    pub moofs: Vec<MoofBox>,
+    pub emsgs: Vec<EmsgBox>,
+    tracks: BTreeMap<TrackId, Track>,
+}
 
 impl Mp4 {
-    pub fn read<R: Read + Seek>(mut reader: R, size: u64) -> io::Result<()> {
+    pub fn read<R: Read + Seek>(mut reader: R, size: u64) -> io::Result<Self> {
         let start = reader.stream_position()?;
 
         let mut ftyp = None;
         let mut moov = None;
+        let mut moofs = Vec::new();
+        let mut moof_offsets = Vec::new();
+        let mut emsgs = Vec::new();
 
         let mut current = start;
         while current < size {
             let header = BoxHeader::read(&mut reader)?;
+            dbg!(header.name, header.size);
 
             if header.size > size {
                 return Err(io::Error::new(
@@ -1070,7 +1086,16 @@ impl Mp4 {
                 BoxType::MoovBox => {
                     moov.replace(MoovBox::read_box(&mut reader, header.size)?);
                 }
-                BoxType::MoofBox => {}
+                BoxType::MoofBox => {
+                    let moof_offset = reader.stream_position()?;
+                    let moof = MoofBox::read_box(&mut reader, header.size)?;
+                    moofs.push(moof);
+                    moof_offsets.push(moof_offset);
+                }
+                BoxType::EmsgBox => {
+                    let emsg = EmsgBox::read_box(&mut reader, header.size)?;
+                    emsgs.push(emsg)
+                }
                 _ => {
                     skip_box(&mut reader, header.size)?;
                 }
@@ -1079,6 +1104,39 @@ impl Mp4 {
             current = reader.stream_position()?;
         }
 
-        Ok(())
+        let Some(ftyp) = ftyp else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "ftyp box is not found",
+            ));
+        };
+
+        let Some(moov) = moov else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "moov box is not found",
+            ));
+        };
+
+        let mut this = Self {
+            ftyp,
+            moov,
+            moofs,
+            emsgs,
+            tracks: Default::default(),
+        };
+
+        let mut tracks = this.build_tracks();
+        this.update_sample_list(&mut tracks);
+        this.tracks = tracks;
+        this.update_tracks();
+
+        Ok(Self {
+            ftyp,
+            moov,
+            moofs,
+            emsgs,
+            tracks,
+        })
     }
 }

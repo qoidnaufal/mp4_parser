@@ -66,8 +66,6 @@ impl<R: Read + Seek> ReadBox<&mut R> for ElstBox {
             entry_size
         };
 
-        dbg!(entry_count, entry_size, size, other_size);
-
         if u64::from(entry_count)
             > size
                 .saturating_sub(header_size)
