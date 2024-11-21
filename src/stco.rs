@@ -79,7 +79,7 @@ impl std::convert::TryFrom<&Co64Box> for StcoBox {
             .entries
             .iter()
             .copied()
-            .map(|n| u32::try_from(n))
+            .map(u32::try_from)
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {

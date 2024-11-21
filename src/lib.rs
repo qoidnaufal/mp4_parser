@@ -56,7 +56,9 @@ use ftyp::FtypBox;
 use moof::MoofBox;
 use moov::MoovBox;
 use stbl::StblBox;
+use tfhd::TfhdBox;
 use trak::TrakBox;
+use trun::TrunBox;
 
 const HEADER_SIZE: u64 = 0b1000;
 const HEADER_EXT_SIZE: u64 = 0b0100;
@@ -614,9 +616,9 @@ impl Matrix {
     fn read_i32<R: Read + Seek>(reader: &mut R) -> io::Result<Self> {
         let mut arr = [0i32; 9];
 
-        for i in 0..arr.len() {
+        for i in &mut arr {
             let num = BigEndian::read_i32(reader)?;
-            arr[i] = num;
+            *i = num;
         }
 
         Ok(Self {
@@ -660,7 +662,7 @@ where
     }
 
     #[inline]
-    fn to_integer(&self) -> T {
+    fn to_integer(self) -> T {
         *self.numer() / *self.denom()
     }
 
@@ -787,7 +789,7 @@ impl BoxHeader {
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
-struct FourCC {
+pub struct FourCC {
     value: [u8; 4],
 }
 
@@ -1046,8 +1048,8 @@ pub struct Sample {
     pub size: u64,
     pub offset: u64,
     pub timescale: u64,
-    pub decode_timestamp: u64,
-    pub composition_timestamp: u64,
+    pub decode_timestamp: i64,
+    pub composition_timestamp: i64,
     pub duration: u64,
 }
 
@@ -1128,6 +1130,7 @@ impl Track {
     }
 }
 
+#[derive(Debug)]
 pub struct Mp4 {
     pub ftyp: FtypBox,
     pub moov: MoovBox,
@@ -1149,7 +1152,6 @@ impl Mp4 {
         let mut current = start;
         while current < size {
             let header = BoxHeader::read(&mut reader)?;
-            dbg!(header.name, header.size);
 
             if header.size > size {
                 return Err(io::Error::new(
@@ -1242,6 +1244,14 @@ impl Mp4 {
             let mut last_stss_index = 0;
             let mut last_sample_in_ctts_run = -1i64;
             let mut ctts_run_index = -1i64;
+            let mut dts_shift = 0;
+
+            // The smallest presentation timestap observed on this stream
+            //
+            // This is typically 0, but in the pressence of sample reordering (cused by AVC/HVC b-frames), it may be non-zero.
+            // In fact, many formats don't require this to be zero, but video players typically
+            // normalize the shown time to start at zero
+            let mut min_composition_timestamp = i64::MAX;
 
             let mut samples = Vec::<Sample>::new();
 
@@ -1288,6 +1298,8 @@ impl Mp4 {
                             last_chunk_in_run = u64::MAX;
                         }
                     }
+
+                    last_sample_in_chunk += stsc.entries[chunk_run_index].samples_per_chunk as u64;
                 }
 
                 // compute timestamp, duration, is_sync
@@ -1309,7 +1321,7 @@ impl Mp4 {
                 let decode_timestamp = if sample_n > 0 {
                     samples[sample_n - 1].duration =
                         stts.entries[stts_run_index as usize].sample_delta as u64;
-                    samples[sample_n - 1].decode_timestamp + samples[sample_n - 1].duration
+                    samples[sample_n - 1].decode_timestamp + samples[sample_n - 1].duration as i64
                 } else {
                     0
                 };
@@ -1324,10 +1336,18 @@ impl Mp4 {
                             ctts.entries[ctts_run_index as usize].sample_count as i64;
                     }
 
-                    decode_timestamp + ctts.entries[ctts_run_index as usize].sample_offset as u64
+                    // dts shift is determined by the smallest negative sample offset
+                    let offset = ctts.entries[ctts_run_index as usize].sample_offset as i64;
+                    if offset < 0 {
+                        dts_shift = dts_shift.max(-offset);
+                    }
+
+                    decode_timestamp + offset
                 } else {
                     decode_timestamp
                 };
+
+                min_composition_timestamp = min_composition_timestamp.min(composition_timestamp);
 
                 let is_sync = if let Some(stss) = &stbl.stss {
                     if last_stss_index < stss.entries.len()
@@ -1350,14 +1370,29 @@ impl Mp4 {
                     timescale,
                     decode_timestamp,
                     composition_timestamp,
-                    duration: 0,
+                    duration: 0, // filled once next sample timestamp is known
                 });
 
                 sample_n += 1;
             }
 
             if let Some(last_sample) = samples.last_mut() {
-                last_sample.duration = trak.mdia.mdhd.duration - last_sample.decode_timestamp;
+                last_sample.duration =
+                    trak.mdia.mdhd.duration - last_sample.decode_timestamp as u64;
+            }
+
+            if dts_shift > 0 {
+                for sample in &mut samples {
+                    sample.decode_timestamp -= dts_shift;
+                }
+            }
+
+            // Shift both DTS & CTS by the smallest CTS
+            if min_composition_timestamp != 0 {
+                for sample in &mut samples {
+                    sample.decode_timestamp -= min_composition_timestamp;
+                    sample.composition_timestamp -= min_composition_timestamp;
+                }
             }
 
             tracks.insert(
@@ -1384,10 +1419,142 @@ impl Mp4 {
         let mut last_run_position = 0;
 
         for moof in &self.moofs {
-            for traf in &moof.trafs {}
+            for traf in &moof.trafs {
+                let track_id = traf.tfhd.track_id;
+                let track = tracks.get_mut(&track_id).ok_or(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("trak box with id {} not found", track_id).as_str(),
+                ))?;
+                let trak = self
+                    .moov
+                    .traks
+                    .iter()
+                    .find(|trak| trak.tkhd.track_id == track_id)
+                    .ok_or(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("trak box with id {} not found", track_id).as_str(),
+                    ))?;
+                let trex = if let Some(mvex) = &self.moov.mvex {
+                    mvex.trexs
+                        .iter()
+                        .find(|trex| trex.track_id == track_id)
+                        .ok_or(io::Error::new(
+                            io::ErrorKind::NotFound,
+                            format!("trak box with id {} not found", track_id).as_str(),
+                        ))?
+                        .clone()
+                } else {
+                    Default::default()
+                };
+
+                let default_sample_duration = traf
+                    .tfhd
+                    .default_sample_duration
+                    .unwrap_or(trex.default_sample_duration);
+                let default_sample_size = traf
+                    .tfhd
+                    .default_sample_size
+                    .unwrap_or(trex.default_sample_size);
+                let default_sample_flags = traf
+                    .tfhd
+                    .default_sample_flags
+                    .unwrap_or(trex.default_sample_flags);
+
+                for (traf_idx, trun) in traf.truns.iter().enumerate() {
+                    for sample_n in 0..trun.sample_count as usize {
+                        let mut sample_flags = default_sample_flags;
+                        if trun.flags & TrunBox::FLAG_SAMPLE_FLAGS != 0 {
+                            sample_flags = trun
+                                .sample_flags
+                                .get(sample_n)
+                                .copied()
+                                .unwrap_or(sample_flags);
+                        } else if sample_n == 0
+                            && (trun.flags & TrunBox::FLAG_FIRST_SAMPLE_FLAGS != 0)
+                        {
+                            sample_flags = trun.first_sample_flags.unwrap_or(sample_flags);
+                        }
+
+                        let mut decode_timestamp = 0;
+                        if track.first_traf_merged || sample_n > 0 {
+                            let prev = &track.samples[track.samples.len() - 1];
+                            decode_timestamp = prev.decode_timestamp + prev.duration as i64;
+                        } else {
+                            if let Some(tfdt) = &traf.tfdt {
+                                decode_timestamp = tfdt.base_media_decode_time as i64;
+                            }
+                            track.first_traf_merged = true;
+                        }
+
+                        let composition_timestamp = if trun.flags & TrunBox::FLAG_SAMPLE_CTS != 0 {
+                            decode_timestamp
+                                + trun.sample_cts.get(sample_n).copied().unwrap_or(0) as i64
+                        } else {
+                            decode_timestamp
+                        };
+
+                        let duration = trun
+                            .sample_duration
+                            .get(sample_n)
+                            .copied()
+                            .unwrap_or(default_sample_duration)
+                            as u64;
+
+                        let base_data_offset_present =
+                            traf.tfhd.flags & TfhdBox::FLAG_BASE_DATA_OFFSET != 0;
+                        let default_base_is_moof =
+                            traf.tfhd.flags & TfhdBox::FLAG_DEFAULT_BASE_IS_MOOF != 0;
+                        let data_offset_present = trun.flags & TrunBox::FLAG_DATA_OFFSET != 0;
+                        let base_data_offset = if !base_data_offset_present {
+                            if !default_base_is_moof {
+                                if sample_n == 0 {
+                                    // the first sample in the track fragment
+                                    moof.start // the position of the first byte of the enclosing Movie Fragment Box
+                                } else {
+                                    last_run_position // the offset of the previous sample
+                                }
+                            } else {
+                                moof.start
+                            }
+                        } else {
+                            traf.tfhd.base_data_offset.unwrap_or(moof.start)
+                        };
+
+                        let sample_size =
+                            trun.sample_sizes
+                                .get(sample_n)
+                                .copied()
+                                .unwrap_or(default_sample_size) as u64;
+
+                        let sample_offset = if traf_idx == 0 && sample_n == 0 {
+                            if data_offset_present {
+                                base_data_offset
+                                    .saturating_add_signed(trun.data_offset.unwrap_or(0) as i64)
+                            } else {
+                                base_data_offset
+                            }
+                        } else {
+                            last_run_position
+                        };
+
+                        last_run_position = sample_offset + sample_size;
+
+                        track.samples.push(Sample {
+                            id: track.samples.len() as u32,
+                            is_sync: (sample_flags >> 16) & 0x1 != 0,
+                            size: sample_size,
+                            offset: sample_offset,
+                            timescale: trak.mdia.mdhd.timescale as u64,
+                            decode_timestamp,
+                            composition_timestamp,
+                            duration,
+                        });
+                    }
+                }
+            }
         }
 
-        todo!()
+        Ok(())
     }
 
     fn update_tracks(&mut self) {
@@ -1396,7 +1563,7 @@ impl Mp4 {
                 track.duration = track
                     .samples
                     .last()
-                    .map(|v| v.decode_timestamp + v.duration)
+                    .map(|v| v.duration.saturating_add_signed(v.composition_timestamp))
                     .unwrap_or_default();
             }
         }

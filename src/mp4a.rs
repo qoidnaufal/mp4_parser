@@ -14,103 +14,6 @@ pub struct Mp4aBox {
     pub esds: Option<EsdsBox>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct EsdsBox {
-    pub version: u8,
-    pub flags: u32,
-    pub es_desc: ESDescriptor,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ESDescriptor {
-    pub es_id: u16,
-    pub dec_config: DecoderConfigDescriptor,
-    pub sl_config: SLConfifDescriptor,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct DecoderConfigDescriptor {
-    pub object_type_indication: u8,
-    pub stream_type: u8,
-    pub up_stream: u8,
-    pub buffer_size_db: u32,
-    pub max_bitrate: u32,
-    pub avg_bitrate: u32,
-    pub dec_specific: DecoderSpecificDescriptor,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct SLConfifDescriptor {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct DecoderSpecificDescriptor {
-    pub profile: u8,
-    pub freq_index: u8,
-    pub chan_conf: u8,
-}
-
-trait Descriptor: Sized {
-    fn desc_tag() -> u8;
-    fn desc_size() -> u32;
-}
-
-trait ReadDesc<T>: Sized {
-    fn read_desc(_: T, size: u32) -> io::Result<Self>;
-}
-
-fn read_desc<R: Read>(reader: &mut R) -> io::Result<(u8, u32)> {
-    let tag = BigEndian::read_u8(reader)?;
-    let mut size: u32 = 0;
-
-    for _ in 0..4 {
-        let b = BigEndian::read_u8(reader)?;
-        size = (size << 7) | (b & 0x7F) as u32;
-
-        if b & 0x80 == 0 {
-            break;
-        }
-    }
-
-    Ok((tag, size))
-}
-
-fn size_of_length(size: u32) -> u32 {
-    match size {
-        0x0..=0x7F => 1,
-        0x80..=0x3FFF => 2,
-        0x4000..=0x1FFFFF => 3,
-        _ => 4,
-    }
-}
-
-fn get_audio_object_type(byte_a: u8, byte_b: u8) -> u8 {
-    let mut profile = byte_a >> 3;
-    if profile == 31 {
-        profile = 32 + ((byte_a & 7) | (byte_b >> 5));
-    }
-    profile
-}
-
-fn get_chan_conf<R: Read + Seek>(
-    reader: &mut R,
-    byte_b: u8,
-    freq_index: u8,
-    extended_profile: bool,
-) -> io::Result<u8> {
-    let chan_conf: u8;
-    if freq_index == 15 {
-        let sample_rate = BigEndian::read_u24(reader)?;
-        chan_conf = ((sample_rate >> 4) & 0x0F) as u8;
-    } else if extended_profile {
-        let byte_c = BigEndian::read_u8(reader)?;
-        chan_conf = (byte_b & 1) | (byte_c & 0xE0);
-    } else {
-        chan_conf = (byte_b >> 3) & 0x0F;
-    }
-
-    Ok(chan_conf)
-}
-
 impl Default for Mp4aBox {
     fn default() -> Self {
         Self {
@@ -222,6 +125,13 @@ impl<R: Read + Seek> ReadBox<&mut R> for Mp4aBox {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EsdsBox {
+    pub version: u8,
+    pub flags: u32,
+    pub es_desc: ESDescriptor,
+}
+
 impl EsdsBox {
     fn new(config: &AacConfig) -> Self {
         Self {
@@ -284,6 +194,13 @@ impl<R: Read + Seek> ReadBox<&mut R> for EsdsBox {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ESDescriptor {
+    pub es_id: u16,
+    pub dec_config: DecoderConfigDescriptor,
+    pub sl_config: SLConfifDescriptor,
+}
+
 impl ESDescriptor {
     fn new(config: &AacConfig) -> Self {
         Self {
@@ -344,6 +261,17 @@ impl<R: Read + Seek> ReadDesc<&mut R> for ESDescriptor {
             sl_config: sl_config.unwrap_or_default(),
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DecoderConfigDescriptor {
+    pub object_type_indication: u8,
+    pub stream_type: u8,
+    pub up_stream: u8,
+    pub buffer_size_db: u32,
+    pub max_bitrate: u32,
+    pub avg_bitrate: u32,
+    pub dec_specific: DecoderSpecificDescriptor,
 }
 
 impl DecoderConfigDescriptor {
@@ -412,6 +340,78 @@ impl<R: Read + Seek> ReadDesc<&mut R> for DecoderConfigDescriptor {
             dec_specific: dec_specific.unwrap_or_default(),
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SLConfifDescriptor {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DecoderSpecificDescriptor {
+    pub profile: u8,
+    pub freq_index: u8,
+    pub chan_conf: u8,
+}
+
+trait Descriptor: Sized {
+    fn desc_tag() -> u8;
+    fn desc_size() -> u32;
+}
+
+trait ReadDesc<T>: Sized {
+    fn read_desc(_: T, size: u32) -> io::Result<Self>;
+}
+
+fn read_desc<R: Read>(reader: &mut R) -> io::Result<(u8, u32)> {
+    let tag = BigEndian::read_u8(reader)?;
+    let mut size: u32 = 0;
+
+    for _ in 0..4 {
+        let b = BigEndian::read_u8(reader)?;
+        size = (size << 7) | (b & 0x7F) as u32;
+
+        if b & 0x80 == 0 {
+            break;
+        }
+    }
+
+    Ok((tag, size))
+}
+
+fn size_of_length(size: u32) -> u32 {
+    match size {
+        0x0..=0x7F => 1,
+        0x80..=0x3FFF => 2,
+        0x4000..=0x1FFFFF => 3,
+        _ => 4,
+    }
+}
+
+fn get_audio_object_type(byte_a: u8, byte_b: u8) -> u8 {
+    let mut profile = byte_a >> 3;
+    if profile == 31 {
+        profile = 32 + ((byte_a & 7) | (byte_b >> 5));
+    }
+    profile
+}
+
+fn get_chan_conf<R: Read + Seek>(
+    reader: &mut R,
+    byte_b: u8,
+    freq_index: u8,
+    extended_profile: bool,
+) -> io::Result<u8> {
+    let chan_conf: u8;
+    if freq_index == 15 {
+        let sample_rate = BigEndian::read_u24(reader)?;
+        chan_conf = ((sample_rate >> 4) & 0x0F) as u8;
+    } else if extended_profile {
+        let byte_c = BigEndian::read_u8(reader)?;
+        chan_conf = (byte_b & 1) | (byte_c & 0xE0);
+    } else {
+        chan_conf = (byte_b >> 3) & 0x0F;
+    }
+
+    Ok(chan_conf)
 }
 
 impl SLConfifDescriptor {

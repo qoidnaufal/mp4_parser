@@ -1,2 +1,2 @@
 # MP4 Parser
-WIP. My attempt to create a *.mp4 parser so i can extract the data to decoder.
+A rewrite of [Rerun's mp4 parser](https://github.com/rerun-io/re_mp4) with zero dependency.
