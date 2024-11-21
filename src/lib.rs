@@ -55,6 +55,8 @@ use emsg::EmsgBox;
 use ftyp::FtypBox;
 use moof::MoofBox;
 use moov::MoovBox;
+use stbl::StblBox;
+use trak::TrakBox;
 
 const HEADER_SIZE: u64 = 0b1000;
 const HEADER_EXT_SIZE: u64 = 0b0100;
@@ -1037,7 +1039,94 @@ fn skip_box<S: Seek>(seeker: &mut S, size: u64) -> io::Result<()> {
     Ok(())
 }
 
-pub struct Track {}
+#[derive(Default, Clone, Copy)]
+pub struct Sample {
+    pub id: u32,
+    pub is_sync: bool,
+    pub size: u64,
+    pub offset: u64,
+    pub timescale: u64,
+    pub decode_timestamp: u64,
+    pub composition_timestamp: u64,
+    pub duration: u64,
+}
+
+impl std::fmt::Debug for Sample {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sample")
+            .field("is_sync", &self.is_sync)
+            .field("size", &self.size)
+            .field("offset", &self.offset)
+            .field("decode_timestamp", &self.decode_timestamp)
+            .field("composition_timestamp", &self.composition_timestamp)
+            .field("duration", &self.duration)
+            .finish()
+    }
+}
+
+impl Sample {
+    pub fn byte_range(&self) -> std::ops::Range<usize> {
+        self.offset as usize..(self.offset + self.size) as usize
+    }
+}
+
+pub struct Track {
+    first_traf_merged: bool,
+    pub width: u16,
+    pub height: u16,
+    pub track_id: u32,
+    pub time_scale: u64,
+    pub duration: u64,
+    pub kind: Option<TrackKind>,
+    pub samples: Vec<Sample>,
+}
+
+impl std::fmt::Debug for Track {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Track")
+            .field("first_traf_merged", &self.first_traf_merged)
+            .field("kind", &self.kind)
+            .field("timescale", &self.time_scale)
+            .field("duration", &self.duration)
+            .finish()
+    }
+}
+
+impl Track {
+    pub fn trak<'a>(&self, mp4: &'a Mp4) -> &'a TrakBox {
+        let Some(trak) = mp4
+            .moov
+            .traks
+            .iter()
+            .find(|trak| trak.tkhd.track_id == self.track_id)
+        else {
+            unreachable!("track with id \"{}\" not found", self.track_id);
+        };
+
+        trak
+    }
+
+    pub fn raw_codec_config(&self, mp4: &Mp4) -> Option<Vec<u8>> {
+        let sample_description = &self.trak(mp4).mdia.minf.stbl.stsd;
+
+        match &sample_description.contents {
+            stsd::StsdBoxContent::Av01(content) => Some(content.av1c.raw.clone()),
+            stsd::StsdBoxContent::Avc1(content) => Some(content.avcc.raw.clone()),
+            stsd::StsdBoxContent::Hev1(content) | stsd::StsdBoxContent::Hvc1(content) => {
+                Some(content.hvcc.raw.clone())
+            }
+            stsd::StsdBoxContent::Vp08(content) => Some(content.vpcc.raw.clone()),
+            stsd::StsdBoxContent::Vp09(content) => Some(content.vpcc.raw.clone()),
+            stsd::StsdBoxContent::Mp4a(_)
+            | stsd::StsdBoxContent::Tx3g(_)
+            | stsd::StsdBoxContent::Unknown(_) => None,
+        }
+    }
+
+    pub fn codec_string(&self, mp4: &Mp4) -> Option<String> {
+        self.trak(mp4).mdia.minf.stbl.stsd.contents.codec_string()
+    }
+}
 
 pub struct Mp4 {
     pub ftyp: FtypBox,
@@ -1127,16 +1216,189 @@ impl Mp4 {
         };
 
         let mut tracks = this.build_tracks();
-        this.update_sample_list(&mut tracks);
+        this.update_sample_list(&mut tracks)?;
         this.tracks = tracks;
         this.update_tracks();
 
-        Ok(Self {
-            ftyp,
-            moov,
-            moofs,
-            emsgs,
-            tracks,
-        })
+        Ok(this)
+    }
+
+    pub fn tracks(&self) -> &BTreeMap<TrackId, Track> {
+        &self.tracks
+    }
+
+    fn build_tracks(&mut self) -> BTreeMap<TrackId, Track> {
+        let mut tracks = BTreeMap::new();
+
+        for trak in &self.moov.traks {
+            let mut sample_n = 0usize;
+            let mut chunk_index = 1u64;
+            let mut chunk_run_index = 0usize;
+            let mut last_sample_in_chunk = 0u64;
+            let mut offset_in_chunk = 0u64;
+            let mut last_chunk_in_run = 0u64;
+            let mut last_sample_in_stts_run = -1i64;
+            let mut stts_run_index = -1i64;
+            let mut last_stss_index = 0;
+            let mut last_sample_in_ctts_run = -1i64;
+            let mut ctts_run_index = -1i64;
+
+            let mut samples = Vec::<Sample>::new();
+
+            fn get_sample_chunk_offset(stbl: &StblBox, chunk_index: u64) -> u64 {
+                if let Some(stco) = &stbl.stco {
+                    stco.entries[chunk_index as usize - 1] as u64
+                } else if let Some(co64) = &stbl.co64 {
+                    co64.entries[chunk_index as usize - 1]
+                } else {
+                    panic!()
+                }
+            }
+
+            let stbl = &trak.mdia.minf.stbl;
+            let stsc = &stbl.stsc;
+            let stsz = &stbl.stsz;
+            let stts = &stbl.stts;
+
+            while sample_n < stsz.sample_sizes.len() {
+                // compute offset
+                if sample_n == 0 {
+                    chunk_index = 1;
+                    chunk_run_index = 0;
+                    last_sample_in_chunk = stsc.entries[chunk_run_index].samples_per_chunk as u64;
+                    offset_in_chunk = 0;
+
+                    if chunk_run_index + 1 < stsc.entries.len() {
+                        last_chunk_in_run =
+                            stsc.entries[chunk_run_index + 1].first_chunk as u64 - 1;
+                    } else {
+                        last_chunk_in_run = u64::MAX;
+                    }
+                } else if sample_n < last_sample_in_chunk as usize {
+                    /* ... */
+                } else {
+                    chunk_index += 1;
+                    offset_in_chunk = 0;
+                    if chunk_index > last_chunk_in_run {
+                        chunk_run_index += 1;
+                        if chunk_run_index + 1 < stsc.entries.len() {
+                            last_chunk_in_run =
+                                stsc.entries[chunk_run_index + 1].first_chunk as u64 - 1;
+                        } else {
+                            last_chunk_in_run = u64::MAX;
+                        }
+                    }
+                }
+
+                // compute timestamp, duration, is_sync
+
+                if sample_n as i64 > last_sample_in_stts_run {
+                    stts_run_index += 1;
+                    if last_sample_in_stts_run < 0 {
+                        last_sample_in_stts_run = 0;
+                    }
+                    last_sample_in_stts_run +=
+                        stts.entries[stts_run_index as usize].sample_count as i64;
+                }
+
+                let timescale = trak.mdia.mdhd.timescale as u64;
+                let size = stsz.sample_sizes[sample_n] as u64;
+                let offset = get_sample_chunk_offset(stbl, chunk_index) + offset_in_chunk;
+                offset_in_chunk += size;
+
+                let decode_timestamp = if sample_n > 0 {
+                    samples[sample_n - 1].duration =
+                        stts.entries[stts_run_index as usize].sample_delta as u64;
+                    samples[sample_n - 1].decode_timestamp + samples[sample_n - 1].duration
+                } else {
+                    0
+                };
+
+                let composition_timestamp = if let Some(ctts) = &stbl.ctts {
+                    if sample_n as i64 >= last_sample_in_ctts_run {
+                        ctts_run_index += 1;
+                        if last_sample_in_ctts_run < 0 {
+                            last_sample_in_ctts_run = 0;
+                        }
+                        last_sample_in_ctts_run +=
+                            ctts.entries[ctts_run_index as usize].sample_count as i64;
+                    }
+
+                    decode_timestamp + ctts.entries[ctts_run_index as usize].sample_offset as u64
+                } else {
+                    decode_timestamp
+                };
+
+                let is_sync = if let Some(stss) = &stbl.stss {
+                    if last_stss_index < stss.entries.len()
+                        && sample_n == stss.entries[last_stss_index] as usize - 1
+                    {
+                        last_stss_index += 1;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    true
+                };
+
+                samples.push(Sample {
+                    id: samples.len() as u32,
+                    is_sync,
+                    size,
+                    offset,
+                    timescale,
+                    decode_timestamp,
+                    composition_timestamp,
+                    duration: 0,
+                });
+
+                sample_n += 1;
+            }
+
+            if let Some(last_sample) = samples.last_mut() {
+                last_sample.duration = trak.mdia.mdhd.duration - last_sample.decode_timestamp;
+            }
+
+            tracks.insert(
+                trak.tkhd.track_id,
+                Track {
+                    first_traf_merged: false,
+                    width: trak.tkhd.width.value(),
+                    height: trak.tkhd.height.value(),
+                    track_id: trak.tkhd.track_id,
+                    time_scale: trak.mdia.mdhd.timescale as u64,
+                    duration: trak.mdia.mdhd.duration,
+                    kind: trak.mdia.minf.stbl.stsd.kind(),
+                    samples,
+                },
+            );
+        }
+
+        tracks
+    }
+
+    // In case the input file is fragmented, it will contain one or more `moof` boxes,
+    // which must be processed to obtain the full list of samples for each track.
+    fn update_sample_list(&mut self, tracks: &mut BTreeMap<TrackId, Track>) -> io::Result<()> {
+        let mut last_run_position = 0;
+
+        for moof in &self.moofs {
+            for traf in &moof.trafs {}
+        }
+
+        todo!()
+    }
+
+    fn update_tracks(&mut self) {
+        for track in self.tracks.values_mut() {
+            if track.duration == 0 {
+                track.duration = track
+                    .samples
+                    .last()
+                    .map(|v| v.decode_timestamp + v.duration)
+                    .unwrap_or_default();
+            }
+        }
     }
 }

@@ -37,7 +37,7 @@ impl Default for StsdBoxContent {
 }
 
 impl StsdBoxContent {
-    fn bit_depth(&self) -> Option<u8> {
+    pub fn bit_depth(&self) -> Option<u8> {
         match self {
             Self::Av01(bx) => Some(bx.av1c.bit_depth),
             Self::Avc1(_) => None, // TODO: figure out bit_depth
@@ -49,7 +49,7 @@ impl StsdBoxContent {
         }
     }
 
-    fn codec_string(&self) -> Option<String> {
+    pub fn codec_string(&self) -> Option<String> {
         match self {
             Self::Av01(av01) => {
                 let profile = av01.av1c.profile;
